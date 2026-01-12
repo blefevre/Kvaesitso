@@ -78,9 +78,30 @@ class FavoritesService(
             automaticallySorted = automaticallySorted
         )
     }
+    
+    /**
+     * Get frequently used apps with context-aware sorting when smart favorites is enabled
+     */
+    fun getContextAwareFavorites(
+        excludeTypes: List<String>? = null,
+        limit: Int = 50
+    ): Flow<List<SavableSearchable>> {
+        return searchableRepository.getContextAwareFavorites(
+            excludeTypes = excludeTypes,
+            limit = limit
+        )
+    }
 
     fun delete(searchable: SavableSearchable) {
         searchableRepository.delete(searchable)
+    }
+    
+    /**
+     * Trigger a context refresh to update context-aware favorites.
+     * Should be called when the home screen is displayed.
+     */
+    suspend fun refreshContext() {
+        searchableRepository.refreshContext()
     }
 
     fun upsert(searchable: SavableSearchable) {

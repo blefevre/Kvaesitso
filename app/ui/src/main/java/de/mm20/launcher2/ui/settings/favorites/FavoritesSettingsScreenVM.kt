@@ -45,4 +45,10 @@ class FavoritesSettingsScreenVM: ViewModel(), KoinComponent {
     fun setCompactTags(compactTags: Boolean) {
         favoritesSettings.setCompactTags(compactTags)
     }
+
+    val smartEnabled = favoritesSettings.smartEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), null)
+    fun setSmartEnabled(smartEnabled: Boolean) {
+        favoritesSettings.setSmartEnabled(smartEnabled)
+    }
 }

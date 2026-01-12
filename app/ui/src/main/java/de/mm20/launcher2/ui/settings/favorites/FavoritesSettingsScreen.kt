@@ -1,6 +1,7 @@
 package de.mm20.launcher2.ui.settings.favorites
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,37 @@ fun FavoritesSettingsScreen() {
                     },
                     icon = R.drawable.show_chart_24px,
                 )
+                val smartEnabled by viewModel.smartEnabled.collectAsState()
+                
+                // Handle permission requests when enabling smart favorites
+                var showPermissionRequest by remember { mutableStateOf(false) }
+                
+                LaunchedEffect(smartEnabled) {
+                    if (smartEnabled == true && showPermissionRequest) {
+                        showPermissionRequest = false
+                    }
+                }
+                
+                SmartFavoritesPermissionHandler(
+                    enabled = smartEnabled == true,
+                    onAllPermissionsGranted = {
+                        // All permissions granted, feature can work fully
+                    }
+                ) {
+                    SwitchPreference(
+                        title = "Smart favorites",
+                        summary = "Use context-aware AI to suggest apps based on time, location, and device state",
+                        value = smartEnabled == true,
+                        enabled = frequentlyUsed == true,
+                        onValueChanged = { newValue ->
+                            if (newValue) {
+                                showPermissionRequest = true
+                            }
+                            viewModel.setSmartEnabled(newValue)
+                        },
+                        icon = R.drawable.star_24px,
+                    )
+                }
                 val frequentlyUsedRows by viewModel.frequentlyUsedRows.collectAsState()
                 SliderPreference(
                     title = stringResource(R.string.frequently_used_rows),

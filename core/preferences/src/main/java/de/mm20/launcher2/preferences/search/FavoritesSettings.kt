@@ -9,6 +9,9 @@ data class FavoritesSettingsData(
     val columns: Int,
     val frequentlyUsed: Boolean,
     val frequentlyUsedRows: Int,
+    val smartEnabled: Boolean,
+    val knnK: Int,
+    val knnAlpha: Double,
 )
 
 class FavoritesSettings internal constructor(
@@ -18,6 +21,9 @@ class FavoritesSettings internal constructor(
         columns = it.gridColumnCount,
         frequentlyUsed = it.favoritesFrequentlyUsed,
         frequentlyUsedRows = it.favoritesFrequentlyUsedRows,
+        smartEnabled = it.favoritesSmartEnabled,
+        knnK = it.favoritesKnnK,
+        knnAlpha = it.favoritesKnnAlpha,
     )
 }.distinctUntilChanged()) {
 
@@ -47,5 +53,26 @@ class FavoritesSettings internal constructor(
 
     fun setCompactTags(compactTags: Boolean) {
         dataStore.update { it.copy(favoritesCompactTags = compactTags) }
+    }
+
+    val smartEnabled: Flow<Boolean>
+        get() = dataStore.data.map { it.favoritesSmartEnabled }.distinctUntilChanged()
+
+    fun setSmartEnabled(smartEnabled: Boolean) {
+        dataStore.update { it.copy(favoritesSmartEnabled = smartEnabled) }
+    }
+
+    val knnK: Flow<Int>
+        get() = dataStore.data.map { it.favoritesKnnK }.distinctUntilChanged()
+
+    fun setKnnK(knnK: Int) {
+        dataStore.update { it.copy(favoritesKnnK = knnK) }
+    }
+
+    val knnAlpha: Flow<Double>
+        get() = dataStore.data.map { it.favoritesKnnAlpha }.distinctUntilChanged()
+
+    fun setKnnAlpha(knnAlpha: Double) {
+        dataStore.update { it.copy(favoritesKnnAlpha = knnAlpha) }
     }
 }

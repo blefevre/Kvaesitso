@@ -27,6 +27,7 @@ import de.mm20.launcher2.ui.component.preferences.PreferenceScreen
 import de.mm20.launcher2.ui.component.preferences.SwitchPreference
 import de.mm20.launcher2.ui.locals.LocalBackStack
 import de.mm20.launcher2.ui.settings.crashreporter.CrashReporterRoute
+import de.mm20.launcher2.ui.settings.favorites.SmartFavoritesDebugRoute
 import de.mm20.launcher2.ui.settings.log.LogRoute
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -132,6 +133,12 @@ fun DebugSettingsScreen() {
                     summary = stringResource(R.string.preference_debug_reinstall_iconpacks_summary),
                     onClick = {
                         viewModel.reinstallIconPacks()
+                    })
+                Preference(
+                    title = "Smart Favorites Debug",
+                    summary = "View context analysis, app patterns, and suggestion algorithms",
+                    onClick = {
+                        backStack.add(SmartFavoritesDebugRoute)
                     })
             }
         }

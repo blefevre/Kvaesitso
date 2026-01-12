@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
+import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
@@ -73,15 +74,13 @@ abstract class FavoritesVM : ViewModel(), KoinComponent {
                     )
                     if (includeFrequentlyUsed) {
                         emitAll(pinned.flatMapLatest { pinned ->
-                            favoritesService.getFavorites(
+                            favoritesService.getContextAwareFavorites(
                                 excludeTypes = if (excludeCalendar) listOf(
                                     "calendar",
                                     "tasks.org",
                                     "tag",
                                     "plugin.calendar"
                                 ) else listOf("tag"),
-                                maxPinnedLevel = PinnedLevel.FrequentlyUsed,
-                                minPinnedLevel = PinnedLevel.FrequentlyUsed,
                                 limit = frequentlyUsedRows * columns - pinned.size % columns,
                             ).map {
                                 pinned + it
@@ -100,11 +99,21 @@ abstract class FavoritesVM : ViewModel(), KoinComponent {
                 .withCustomLabels(customAttributesRepository)
                 .map { it.sortedBy { it } }
         }
-    }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(), replay = 1)
+    }.shareIn(viewModelScope, SharingStarted.Lazily, replay = 1)
 
 
     fun selectTag(tag: String?) {
         selectedTag.value = tag
+    }
+
+    /**
+     * Refresh context to update context-aware favorites.
+     * Should be called when the home screen becomes visible.
+     */
+    fun refreshContext() {
+        viewModelScope.launch {
+            favoritesService.refreshContext()
+        }
     }
 
     abstract fun setTagsExpanded(expanded: Boolean)

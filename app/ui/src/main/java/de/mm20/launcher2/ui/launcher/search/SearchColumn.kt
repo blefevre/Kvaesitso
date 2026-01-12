@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -125,6 +126,13 @@ fun SearchColumn(
     var selectedWebsiteIndex: Int by remember(query) { mutableIntStateOf(-1) }
 
     val showFilters by viewModel.showFilters
+
+    // Refresh context when favorites become visible or tag selection changes to ensure context-aware favorites are updated
+    LaunchedEffect(favoritesEnabled && !hideFavs, selectedTag) {
+        if (favoritesEnabled && !hideFavs) {
+            favoritesVM.refreshContext()
+        }
+    }
 
     AnimatedContent(
         showFilters,

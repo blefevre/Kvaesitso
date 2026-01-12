@@ -10,19 +10,36 @@ import de.mm20.launcher2.database.entities.SavedSearchableUpdateContentEntity
 import de.mm20.launcher2.database.entities.SavedSearchableUpdatePinEntity
 import de.mm20.launcher2.ktx.jsonObjectOf
 import de.mm20.launcher2.preferences.WeightFactor
+import de.mm20.launcher2.preferences.search.FavoritesSettings
 import de.mm20.launcher2.preferences.search.RankingSettings
 import de.mm20.launcher2.search.SavableSearchable
 import de.mm20.launcher2.search.SearchableDeserializer
+import de.mm20.launcher2.searchable.context.ContextData
+import de.mm20.launcher2.searchable.context.ContextManager
+import de.mm20.launcher2.searchable.context.ContextVector
+import de.mm20.launcher2.searchable.context.KNNContextMatcher
+import de.mm20.launcher2.searchable.debug.AppDebugInfo
+import de.mm20.launcher2.searchable.debug.AppSuggestionDebugInfo
+import de.mm20.launcher2.searchable.debug.ContextDebugInfo
+import de.mm20.launcher2.searchable.debug.SmartFavoritesAnalytics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import de.mm20.launcher2.searchable.debug.NetworkUsage
+import de.mm20.launcher2.searchable.debug.PatternType
+import de.mm20.launcher2.searchable.debug.UsagePattern
 import org.json.JSONArray
 import org.json.JSONException
 import org.koin.core.component.KoinComponent
@@ -133,11 +150,47 @@ interface SavableSearchableRepository : Backupable {
      * - entries that are inconsistent (the key column is not equal to the key of the searchable)
      */
     suspend fun cleanupDatabase(): Int
+
+    /**
+     * Debug methods for smart favorites visualization and analysis
+     */
+    suspend fun getDebugInfo(appKey: String): AppDebugInfo?
+    
+    suspend fun getAllAppsDebugInfo(): List<AppDebugInfo>
+    
+    suspend fun getCurrentContextDebugInfo(): ContextDebugInfo
+    
+    suspend fun getSmartFavoritesAnalytics(): SmartFavoritesAnalytics
+    
+    suspend fun getAppSuggestionDebugInfo(currentContext: ContextData? = null): List<AppSuggestionDebugInfo>
+    
+    suspend fun getKnnConfiguration(): Pair<Int, Double>
+    
+    /**
+     * Get frequently used apps sorted by context-aware relevance
+     */
+    fun getContextAwareFavorites(
+        excludeTypes: List<String>? = null,
+        limit: Int = 50
+    ): Flow<List<SavableSearchable>>
+    
+    /**
+     * Trigger a context refresh to update context-aware favorites
+     */
+    suspend fun refreshContext()
+    
+    /**
+     * Get reactive app suggestions that update with context changes
+     */
+    fun getReactiveAppSuggestions(): Flow<List<AppSuggestionDebugInfo>>
+    
 }
 
 internal class SavableSearchableRepositoryImpl(
     private val database: AppDatabase,
     private val settings: RankingSettings,
+    private val favoritesSettings: FavoritesSettings,
+    private val contextManager: ContextManager,
 ) : SavableSearchableRepository, KoinComponent {
 
     private val scope = CoroutineScope(Job() + Dispatchers.Default)
@@ -210,17 +263,45 @@ internal class SavableSearchableRepositoryImpl(
 
     override fun touch(searchable: SavableSearchable) {
         scope.launch {
+            val dao = database.searchableDao()
+            val currentContext = contextManager.getCurrentContext()
+            val isSmartFavoritesEnabled = favoritesSettings.firstOrNull()?.smartEnabled ?: false
+            
             val weightFactor =
                 when (settings.weightFactor.firstOrNull()) {
                     WeightFactor.Low -> WEIGHT_FACTOR_LOW
                     WeightFactor.High -> WEIGHT_FACTOR_HIGH
                     else -> WEIGHT_FACTOR_MEDIUM
                 }
+
             val item =
                 SavedSearchable(searchable.key, searchable, 0, 0, VisibilityLevel.Default, 0.0)
-            item.toDatabaseEntity()?.let {
-                database.searchableDao()
-                    .touch(it, weightFactor)
+            item.toDatabaseEntity()?.let { entity ->
+                if (isSmartFavoritesEnabled) {
+                    // Get existing context history
+                    val existingHistory = dao.getContextHistory(searchable.key)
+                    val historyList = existingHistory?.let { 
+                        try {
+                            Json.decodeFromString<List<ContextData>>(it)
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                    } ?: emptyList()
+                    
+                    // Add current context to history
+                    val updatedHistory = (historyList + currentContext).takeLast(MAX_CONTEXT_HISTORY)
+                    val historyJson = Json.encodeToString(updatedHistory)
+                    
+                    // Use the standard weight factor for EMA updates
+                    // KNN scores are calculated at display time, not stored in the weight
+                    // This ensures consistent weight decay regardless of context matching
+                    dao.touch(entity, weightFactor)
+                    dao.updateContextHistory(searchable.key, historyJson)
+                    
+                } else {
+                    // Standard touch operation without context awareness
+                    dao.touch(entity, weightFactor)
+                }
             }
         }
     }
@@ -532,9 +613,519 @@ internal class SavableSearchableRepositoryImpl(
         return removed
     }
 
+    // Debug methods implementation
+    override suspend fun getDebugInfo(appKey: String): AppDebugInfo? {
+        val dao = database.searchableDao()
+        val entity = dao.getByKey(appKey).firstOrNull() ?: return null
+        
+        val contextHistory = entity.contextHistory.let { historyJson ->
+            try {
+                Json.decodeFromString<List<ContextData>>(historyJson)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        
+        val patterns = analyzeUsagePatternsForApp(contextHistory)
+        val currentContext = contextManager.getCurrentContext()
+        val contextScore = if (contextHistory.isNotEmpty()) {
+            contextManager.calculateContextAwareWeight(contextHistory, currentContext, entity.weight)
+        } else {
+            entity.weight
+        }
+        
+        return AppDebugInfo(
+            key = entity.key,
+            name = extractAppNameFromEntity(entity),
+            launchCount = entity.launchCount,
+            weight = entity.weight,
+            contextHistory = contextHistory,
+            patterns = patterns,
+            currentContextScore = contextScore,
+            lastLaunched = contextHistory.lastOrNull()?.timestamp
+        )
+    }
+    
+    override suspend fun getAllAppsDebugInfo(): List<AppDebugInfo> {
+        val dao = database.searchableDao()
+        val allEntities = dao.get(
+            frequentlyUsed = true,
+            manuallySorted = true,
+            automaticallySorted = true,
+            unused = true,
+            limit = 1000
+        ).firstOrNull() ?: emptyList()
+        
+        return allEntities.mapNotNull { entity ->
+            getDebugInfo(entity.key)
+        }.sortedByDescending { it.weight }
+    }
+    
+    override suspend fun getCurrentContextDebugInfo(): ContextDebugInfo {
+        val currentContext = contextManager.getCurrentContext()
+        return ContextDebugInfo(
+            currentContext = currentContext,
+            timestamp = System.currentTimeMillis(),
+            contextSummary = buildContextSummary(currentContext)
+        )
+    }
+    
+    override suspend fun getSmartFavoritesAnalytics(): SmartFavoritesAnalytics {
+        val dao = database.searchableDao()
+        val allEntities = dao.get(
+            frequentlyUsed = true,
+            manuallySorted = true,
+            automaticallySorted = true,
+            unused = true,
+            limit = 1000
+        ).firstOrNull() ?: emptyList()
+        
+        val appsWithData = allEntities.filter { it.contextHistory.isNotBlank() && it.contextHistory != "[]" }
+        
+        val allContextHistory = appsWithData.flatMap { entity ->
+            try {
+                Json.decodeFromString<List<ContextData>>(entity.contextHistory)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        
+        val timeSlotCounts = allContextHistory.mapNotNull { it.timeContext?.timeSlot }
+            .groupingBy { it }.eachCount()
+        val mostActiveTimeSlot = timeSlotCounts.maxByOrNull { it.value }?.key
+        
+        val wifiUsage = allContextHistory.mapNotNull { it.networkContext?.wifiSsid }
+            .groupingBy { it }.eachCount()
+            .map { (ssid, count) -> NetworkUsage(ssid, count, 1) }
+            .sortedByDescending { it.usageCount }
+            .take(10)
+        
+        val bluetoothCategories = allContextHistory.flatMap { 
+            it.bluetoothContext?.deviceCategories ?: emptySet() 
+        }.map { it.name }.groupingBy { it }.eachCount()
+            .toList().sortedByDescending { it.second }.take(5).map { it.first }
+        
+        val batteryUsage = allContextHistory.mapNotNull { it.deviceContext?.isCharging }
+            .groupingBy { if (it) "charging" else "not_charging" }.eachCount()
+        
+        val orientationUsage = allContextHistory.mapNotNull { it.deviceContext?.orientation }
+            .groupingBy { it.name }.eachCount()
+        
+        return SmartFavoritesAnalytics(
+            totalApps = allEntities.size,
+            appsWithSmartData = appsWithData.size,
+            averageContextHistorySize = if (appsWithData.isNotEmpty()) {
+                appsWithData.sumOf { entity ->
+                    try {
+                        Json.decodeFromString<List<ContextData>>(entity.contextHistory).size
+                    } catch (e: Exception) {
+                        0
+                    }
+                }.toDouble() / appsWithData.size
+            } else 0.0,
+            mostActiveTimeSlot = mostActiveTimeSlot,
+            topWifiNetworks = wifiUsage,
+            topBluetoothCategories = bluetoothCategories,
+            batteryUsageDistribution = batteryUsage,
+            orientationUsage = orientationUsage
+        )
+    }
+    
+    override suspend fun getAppSuggestionDebugInfo(currentContext: ContextData?): List<AppSuggestionDebugInfo> {
+        val context = currentContext ?: contextManager.getCurrentContext()
+        val dao = database.searchableDao()
+        
+        val allEntities = dao.get(
+            frequentlyUsed = true,
+            limit = 50
+        ).firstOrNull() ?: emptyList()
+        
+        // Get KNN configuration - use same settings as getContextAwareFavorites
+        val settingsData = favoritesSettings.firstOrNull()
+        val knnK = settingsData?.knnK ?: 10
+        val knnAlpha = settingsData?.knnAlpha ?: 0.7
+        val knnMatcher = KNNContextMatcher(k = knnK, alpha = knnAlpha)
+        
+        return allEntities.mapNotNull { entity ->
+            val contextHistory = try {
+                Json.decodeFromString<List<ContextData>>(entity.contextHistory)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            
+            if (contextHistory.isEmpty()) return@mapNotNull null
+            
+            // Use the SAME individual scoring logic as getContextAwareFavorites
+            val usageVectors = contextHistory.map { contextData ->
+                KNNContextMatcher.AppUsageVector(
+                    appKey = entity.key,
+                    contextVector = ContextVector.fromContextData(contextData),
+                    timestamp = contextData.timestamp,
+                    weight = 1.0
+                )
+            }
+
+            // Calculate context similarity score for this app
+            val contextSimilarity = knnMatcher.calculateAppContextScore(context, usageVectors)
+
+            // Combine context similarity with base weight (same as getContextAwareFavorites)
+            val contextScore = knnMatcher.calculateCombinedScore(contextSimilarity, entity.weight)
+            
+            // Build matching patterns for debugging
+            val patterns = contextManager.analyzeUsagePatterns(contextHistory)
+            val matchingPatterns = patterns.filter { pattern ->
+                when {
+                    pattern.startsWith("time_") -> {
+                        val hour = pattern.substringAfter("time_").substringBefore("h").toIntOrNull()
+                        hour == context.timeContext?.hour
+                    }
+                    pattern.startsWith("day_") -> {
+                        val day = pattern.substringAfter("day_").toIntOrNull()
+                        day == context.timeContext?.dayOfWeek
+                    }
+                    pattern.startsWith("wifi_") -> {
+                        val ssid = pattern.substringAfter("wifi_")
+                        ssid == context.networkContext?.wifiSsid
+                    }
+                    else -> false
+                }
+            }
+            
+            AppSuggestionDebugInfo(
+                appKey = entity.key,
+                appName = extractAppNameFromEntity(entity),
+                baseWeight = entity.weight,
+                contextBoost = contextScore - entity.weight,
+                finalScore = contextScore,
+                matchingPatterns = matchingPatterns,
+                contextSimilarity = contextSimilarity,
+                reason = "Similarity: ${String.format("%.3f", contextSimilarity)}, patterns: ${matchingPatterns.size}"
+            )
+        }.sortedByDescending { it.finalScore }
+    }
+    
+    // Helper methods
+    private fun analyzeUsagePatternsForApp(contextHistory: List<ContextData>): List<UsagePattern> {
+        val patterns = mutableListOf<UsagePattern>()
+        
+        if (contextHistory.size < 3) return patterns
+        
+        // Time patterns
+        val hours = contextHistory.mapNotNull { it.timeContext?.hour }
+        val mostCommonHour = hours.groupingBy { it }.eachCount().maxByOrNull { it.value }
+        mostCommonHour?.let { (hour, count) ->
+            val strength = count.toDouble() / hours.size
+            if (strength >= 0.4) {
+                patterns.add(
+                    UsagePattern(
+                        type = PatternType.TIME_OF_DAY,
+                        description = "Often used at ${hour}:00",
+                        strength = strength,
+                        occurrences = count,
+                        details = "Used at ${hour}:00 in ${count}/${hours.size} sessions"
+                    )
+                )
+            }
+        }
+        
+        // WiFi patterns
+        val wifiNetworks = contextHistory.mapNotNull { it.networkContext?.wifiSsid }
+        val mostCommonWifi = wifiNetworks.groupingBy { it }.eachCount().maxByOrNull { it.value }
+        mostCommonWifi?.let { (ssid, count) ->
+            val strength = count.toDouble() / wifiNetworks.size
+            if (strength >= 0.6) {
+                patterns.add(
+                    UsagePattern(
+                        type = PatternType.WIFI_NETWORK,
+                        description = "Frequently used on $ssid",
+                        strength = strength,
+                        occurrences = count,
+                        details = "Used on $ssid in ${count}/${wifiNetworks.size} sessions"
+                    )
+                )
+            }
+        }
+        
+        return patterns
+    }
+    
+    private suspend fun extractAppNameFromEntity(entity: SavedSearchableEntity): String {
+        return try {
+            val savedSearchable = fromDatabaseEntity(entity)
+            savedSearchable.searchable?.label ?: "Unknown App"
+        } catch (e: Exception) {
+            // Fallback to simple string extraction
+            try {
+                entity.serializedSearchable.substringAfter("\"label\":\"").substringBefore("\"")
+            } catch (e2: Exception) {
+                "Unknown App"
+            }
+        }
+    }
+    
+    private fun buildContextSummary(context: ContextData): String {
+        val parts = mutableListOf<String>()
+        
+        context.timeContext?.let { time ->
+            parts.add("${time.hour}:00 ${time.timeSlot.name.lowercase()}")
+        }
+        
+        context.networkContext?.let { network ->
+            when {
+                network.wifiSsid != null -> parts.add("WiFi: ${network.wifiSsid}")
+                network.connectionType.name == "MOBILE" -> parts.add("Mobile data")
+                else -> parts.add("No connection")
+            }
+        }
+        
+        context.deviceContext?.let { device ->
+            if (device.isCharging) parts.add("Charging")
+            parts.add(device.orientation.name.lowercase())
+        }
+        
+        return parts.joinToString(" • ")
+    }
+    
+    private fun buildSuggestionReason(
+        similarity: Double,
+        matchingPatterns: List<String>,
+        launchCount: Int
+    ): String {
+        val reasons = mutableListOf<String>()
+        
+        if (similarity > 0.8) {
+            reasons.add("Very similar context")
+        } else if (similarity > 0.6) {
+            reasons.add("Similar context")
+        }
+        
+        if (matchingPatterns.isNotEmpty()) {
+            reasons.add("${matchingPatterns.size} pattern(s) match")
+        }
+        
+        if (launchCount > 10) {
+            reasons.add("Frequently used")
+        }
+        
+        return if (reasons.isNotEmpty()) {
+            reasons.joinToString(" • ")
+        } else {
+            "Low similarity score"
+        }
+    }
+    
+    private fun buildKNNSuggestionReason(
+        knnResult: KNNContextMatcher.KNNResult?,
+        matchingPatterns: List<String>,
+        launchCount: Int
+    ): String {
+        val reasons = mutableListOf<String>()
+        
+        knnResult?.let { result ->
+            if (result.knnScore > 0.8) {
+                reasons.add("Strong KNN match (${result.nearestCount}/${result.totalNearestContexts})")
+            } else if (result.knnScore > 0.4) {
+                reasons.add("Good KNN match (${result.nearestCount}/${result.totalNearestContexts})")
+            } else if (result.nearestCount > 0) {
+                reasons.add("Weak KNN match (${result.nearestCount}/${result.totalNearestContexts})")
+            }
+            
+            if (result.averageSimilarity > 0.8) {
+                reasons.add("High context similarity")
+            } else if (result.averageSimilarity > 0.6) {
+                reasons.add("Good context similarity")
+            }
+        }
+        
+        if (matchingPatterns.isNotEmpty()) {
+            reasons.add("${matchingPatterns.size} pattern(s) match")
+        }
+        
+        if (launchCount > 10) {
+            reasons.add("Frequently used")
+        }
+        
+        return if (reasons.isNotEmpty()) {
+            reasons.joinToString(" • ")
+        } else {
+            "No KNN match found"
+        }
+    }
+    
+    override suspend fun getKnnConfiguration(): Pair<Int, Double> {
+        val settingsData = favoritesSettings.firstOrNull()
+        val knnK = settingsData?.knnK ?: 10
+        val knnAlpha = settingsData?.knnAlpha ?: 0.7
+        return Pair(knnK, knnAlpha)
+    }
+    
+    /**
+     * Internal data class to hold scored app results.
+     * Used as single source of truth for both favorites display and debug view.
+     */
+    private data class ScoredApp(
+        val searchable: SavableSearchable,
+        val entity: SavedSearchableEntity,
+        val baseWeight: Double,
+        val contextSimilarity: Double,
+        val finalScore: Double
+    )
+
+    /**
+     * Internal function to calculate scored apps for a given context.
+     * This is the SINGLE SOURCE OF TRUTH for scoring - both getContextAwareFavorites
+     * and getReactiveAppSuggestions use this.
+     */
+    private suspend fun calculateScoredApps(
+        currentContext: ContextData,
+        knnK: Int,
+        knnAlpha: Double,
+        limit: Int
+    ): List<ScoredApp> {
+        val dao = database.searchableDao()
+        val knnMatcher = KNNContextMatcher(k = knnK, alpha = knnAlpha)
+
+        // Always fetch a large pool of candidates for KNN scoring
+        // KNN can completely reorder apps, so we need to consider many candidates
+        // even if the final output limit is small
+        val candidatePoolSize = maxOf(50, limit * 2)
+        val entities = dao.get(
+            frequentlyUsed = true,
+            limit = candidatePoolSize
+        ).firstOrNull() ?: emptyList()
+
+        if (entities.isEmpty()) {
+            return emptyList()
+        }
+
+        return entities.mapNotNull { entity ->
+            val savedSearchable = fromDatabaseEntity(entity)
+            val searchable = savedSearchable.searchable ?: return@mapNotNull null
+
+            // Get context history for this app
+            val contextHistory = try {
+                Json.decodeFromString<List<ContextData>>(entity.contextHistory)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            if (contextHistory.isEmpty()) {
+                // No context history - use base weight only
+                return@mapNotNull ScoredApp(
+                    searchable = searchable,
+                    entity = entity,
+                    baseWeight = entity.weight,
+                    contextSimilarity = 0.0,
+                    finalScore = entity.weight
+                )
+            }
+
+            // Convert to usage vectors
+            val usageVectors = contextHistory.map { contextData ->
+                KNNContextMatcher.AppUsageVector(
+                    appKey = entity.key,
+                    contextVector = ContextVector.fromContextData(contextData),
+                    timestamp = contextData.timestamp,
+                    weight = 1.0
+                )
+            }
+
+            // Calculate context similarity score for this app
+            val contextSimilarity = knnMatcher.calculateAppContextScore(currentContext, usageVectors)
+
+            // Combine context similarity with base weight
+            val finalScore = knnMatcher.calculateCombinedScore(contextSimilarity, entity.weight)
+
+            ScoredApp(
+                searchable = searchable,
+                entity = entity,
+                baseWeight = entity.weight,
+                contextSimilarity = contextSimilarity,
+                finalScore = finalScore
+            )
+        }.sortedByDescending { it.finalScore }.take(limit)
+    }
+
+    override fun getContextAwareFavorites(
+        excludeTypes: List<String>?,
+        limit: Int
+    ): Flow<List<SavableSearchable>> = favoritesSettings.flatMapLatest { settings ->
+        if (settings?.smartEnabled != true) {
+            // If smart favorites is disabled, just return regular frequently used apps
+            get(
+                excludeTypes = excludeTypes,
+                minPinnedLevel = PinnedLevel.FrequentlyUsed,
+                maxPinnedLevel = PinnedLevel.FrequentlyUsed,
+                limit = limit,
+            )
+        } else {
+            // Smart favorites enabled - sort by context-aware relevance
+            contextManager.contextFlow.flatMapLatest { currentContext ->
+                flow {
+                    android.util.Log.d("ContextAwareFavorites", "Recalculating favorites for context: $currentContext")
+
+                    val knnK = settings.knnK ?: 10
+                    val knnAlpha = settings.knnAlpha ?: 0.7
+
+                    val scoredApps = calculateScoredApps(currentContext, knnK, knnAlpha, limit)
+                    val sortedApps = scoredApps.map { it.searchable }
+
+                    android.util.Log.d("ContextAwareFavorites", "Emitting ${sortedApps.size} context-aware favorites: ${scoredApps.map { "${it.searchable.key} (${String.format("%.3f", it.finalScore)})" }}")
+
+                    emit(sortedApps)
+                }
+            }
+        }
+    }
+
+    override suspend fun refreshContext() {
+        contextManager.refreshContext()
+    }
+
+    override fun getReactiveAppSuggestions(): Flow<List<AppSuggestionDebugInfo>> {
+        return favoritesSettings.flatMapLatest { settings ->
+            if (settings?.smartEnabled != true) {
+                // Smart favorites disabled - return empty
+                flowOf(emptyList())
+            } else {
+                contextManager.contextFlow.flatMapLatest { currentContext ->
+                    flow {
+                        android.util.Log.d("ReactiveAppSuggestions", "Creating debug info for context: $currentContext")
+
+                        val knnK = settings.knnK ?: 10
+                        val knnAlpha = settings.knnAlpha ?: 0.7
+
+                        // Use the SAME scoring function as getContextAwareFavorites
+                        val scoredApps = calculateScoredApps(currentContext, knnK, knnAlpha, 50)
+
+                        val debugInfoList = scoredApps.mapIndexed { index, scored ->
+                            val appName = scored.searchable.labelOverride
+                                ?: scored.searchable.label
+
+                            AppSuggestionDebugInfo(
+                                appKey = scored.entity.key,
+                                appName = appName,
+                                baseWeight = scored.baseWeight,
+                                contextBoost = scored.finalScore - scored.baseWeight,
+                                finalScore = scored.finalScore,
+                                matchingPatterns = emptyList<String>(),
+                                contextSimilarity = scored.contextSimilarity,
+                                reason = "Rank #${index + 1}, Similarity: ${String.format("%.3f", scored.contextSimilarity)}, Base: ${String.format("%.3f", scored.baseWeight)}"
+                            )
+                        }
+
+                        android.util.Log.d("ReactiveAppSuggestions", "Debug info created: ${debugInfoList.map { "${it.appName} (${String.format("%.3f", it.finalScore)})" }}")
+                        emit(debugInfoList)
+                    }
+                }
+            }
+        }
+    }
+
     companion object {
         private const val WEIGHT_FACTOR_LOW = 0.01
         private const val WEIGHT_FACTOR_MEDIUM = 0.03
         private const val WEIGHT_FACTOR_HIGH = 0.1
+        private const val MAX_CONTEXT_HISTORY = 50 // Maximum number of context entries to keep per app
     }
 }

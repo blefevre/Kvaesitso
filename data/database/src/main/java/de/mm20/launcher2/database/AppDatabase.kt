@@ -42,6 +42,7 @@ import de.mm20.launcher2.database.migrations.Migration_25_26
 import de.mm20.launcher2.database.migrations.Migration_27_28
 import de.mm20.launcher2.database.migrations.Migration_28_29
 import de.mm20.launcher2.database.migrations.Migration_29_30
+import de.mm20.launcher2.database.migrations.Migration_30_31
 import de.mm20.launcher2.database.migrations.Migration_6_7
 import de.mm20.launcher2.database.migrations.Migration_7_8
 import de.mm20.launcher2.database.migrations.Migration_8_9
@@ -64,7 +65,7 @@ import java.util.UUID
         ShapesEntity::class,
         TransparenciesEntity::class,
         TypographyEntity::class,
-    ], version = 30, exportSchema = true
+    ], version = 31, exportSchema = true
 )
 @TypeConverters(ComponentNameConverter::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -166,6 +167,7 @@ abstract class AppDatabase : RoomDatabase() {
                         Migration_27_28(),
                         Migration_28_29(),
                         Migration_29_30(),
+                        Migration_30_31(),
                     ).build()
             if (_instance == null) _instance = instance
             return instance

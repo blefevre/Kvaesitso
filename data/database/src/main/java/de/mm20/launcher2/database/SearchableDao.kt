@@ -218,4 +218,10 @@ interface SearchableDao {
 
     @Query("UPDATE Searchable SET `key` = :newKey WHERE `key` = :oldKey")
     suspend fun updateKey(oldKey: String, newKey: String)
+
+    @Query("UPDATE Searchable SET contextHistory = :contextHistory WHERE `key` = :key")
+    suspend fun updateContextHistory(key: String, contextHistory: String)
+
+    @Query("SELECT contextHistory FROM Searchable WHERE `key` = :key")
+    suspend fun getContextHistory(key: String): String?
 }

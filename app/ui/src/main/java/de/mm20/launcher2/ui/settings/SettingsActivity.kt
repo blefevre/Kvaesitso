@@ -78,6 +78,8 @@ import de.mm20.launcher2.ui.settings.easteregg.EasterEggSettingsRoute
 import de.mm20.launcher2.ui.settings.easteregg.EasterEggSettingsScreen
 import de.mm20.launcher2.ui.settings.favorites.FavoritesSettingsRoute
 import de.mm20.launcher2.ui.settings.favorites.FavoritesSettingsScreen
+import de.mm20.launcher2.ui.settings.favorites.SmartFavoritesDebugRoute
+import de.mm20.launcher2.ui.settings.favorites.SmartFavoritesDebugScreen
 import de.mm20.launcher2.ui.settings.feed.FeedIntegrationSettingsRoute
 import de.mm20.launcher2.ui.settings.feed.FeedIntegrationSettingsScreen
 import de.mm20.launcher2.ui.settings.filesearch.FileSearchSettingsRoute
@@ -290,6 +292,9 @@ class SettingsActivity : BaseActivity() {
             }
             entry<DebugSettingsRoute> {
                 DebugSettingsScreen()
+            }
+            entry<SmartFavoritesDebugRoute> {
+                SmartFavoritesDebugScreen()
             }
             entry<LocaleSettingsRoute> {
                 LocaleSettingsScreen()
