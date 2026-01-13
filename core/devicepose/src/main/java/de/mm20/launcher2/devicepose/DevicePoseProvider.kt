@@ -8,6 +8,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationManager
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.getSystemService
 import androidx.core.location.LocationListenerCompat
@@ -82,7 +83,8 @@ class DevicePoseProvider internal constructor(
                         LocationManager.GPS_PROVIDER,
                         minTimeMs,
                         minDistanceM,
-                        locationCallback
+                        locationCallback,
+                        Looper.getMainLooper()
                     )
                 }
                 if (hasCoarseAccess) {
@@ -90,7 +92,8 @@ class DevicePoseProvider internal constructor(
                         LocationManager.NETWORK_PROVIDER,
                         minTimeMs,
                         minDistanceM,
-                        locationCallback
+                        locationCallback,
+                        Looper.getMainLooper()
                     )
                 }
             }?.onFailure {

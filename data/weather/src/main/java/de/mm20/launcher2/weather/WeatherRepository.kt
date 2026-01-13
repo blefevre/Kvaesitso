@@ -14,6 +14,7 @@ import de.mm20.launcher2.plugin.PluginType
 import de.mm20.launcher2.preferences.LatLon
 import de.mm20.launcher2.preferences.weather.WeatherLocation
 import de.mm20.launcher2.preferences.weather.WeatherSettings
+import de.mm20.launcher2.weather.bom.BomProvider
 import de.mm20.launcher2.weather.breezy.BreezyWeatherProvider
 import de.mm20.launcher2.weather.brightsky.BrightSkyProvider
 import de.mm20.launcher2.weather.metno.MetNoProvider
@@ -187,6 +188,14 @@ internal class WeatherRepositoryImpl(
                     BreezyWeatherProvider.Id,
                     context.getString(R.string.provider_breezy),
                     managedLocation = true
+                )
+            )
+        }
+        if (BomProvider.isAvailable(context)) {
+            providers.add(
+                WeatherProviderInfo(
+                    BomProvider.Id,
+                    context.getString(R.string.provider_bom)
                 )
             )
         }

@@ -1,5 +1,6 @@
 package de.mm20.launcher2.weather
 
+import de.mm20.launcher2.weather.bom.BomProvider
 import de.mm20.launcher2.weather.breezy.BreezyWeatherProvider
 import de.mm20.launcher2.weather.brightsky.BrightSkyProvider
 import de.mm20.launcher2.weather.metno.MetNoProvider
@@ -16,6 +17,7 @@ val weatherModule = module {
             MetNoProvider.Id -> MetNoProvider(androidContext(), get())
             BrightSkyProvider.Id -> BrightSkyProvider(androidContext())
             BreezyWeatherProvider.Id -> BreezyWeatherProvider(androidContext())
+            BomProvider.Id -> BomProvider(androidContext())
             else -> PluginWeatherProvider(androidContext(), providerId)
         }
     }

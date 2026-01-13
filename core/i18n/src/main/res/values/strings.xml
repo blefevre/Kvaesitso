@@ -459,6 +459,7 @@
     <string name="provider_brightsky">Deutscher Wetterdienst (Germany only)</string>
     <string name="provider_here">HERE</string>
     <string name="provider_breezy">Breezy Weather</string>
+    <string name="provider_bom">Bureau of Meteorology (Australia)</string>
     <string name="preference_category_location">Location</string>
     <string name="preference_automatic_location">Automatic location</string>
     <string name="preference_automatic_location_summary">Use location services to determine location automatically</string>
