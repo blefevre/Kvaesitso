@@ -64,6 +64,12 @@ sealed class Widget {
                             ?: NotesWidgetConfig()
                     NotesWidget(entity.id, config)
                 }
+                SnapPointWidget.Type -> {
+                    val config: SnapPointWidgetConfig =
+                        Json.decodeFromStringOrNull(entity.config?.takeIf { it.isNotBlank() })
+                            ?: SnapPointWidgetConfig()
+                    SnapPointWidget(entity.id, config)
+                }
 
                 else -> null
             }

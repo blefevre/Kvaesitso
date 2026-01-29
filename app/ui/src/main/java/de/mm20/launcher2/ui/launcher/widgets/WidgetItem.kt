@@ -37,6 +37,7 @@ import de.mm20.launcher2.ui.launcher.widgets.external.AppWidget
 import de.mm20.launcher2.ui.launcher.widgets.favorites.AppsWidget
 import de.mm20.launcher2.ui.launcher.widgets.music.MusicWidget
 import de.mm20.launcher2.ui.launcher.widgets.notes.NotesWidget
+import de.mm20.launcher2.ui.launcher.widgets.snappoint.SnapPointWidget as SnapPointWidgetUI
 import de.mm20.launcher2.ui.launcher.widgets.weather.WeatherWidget
 import de.mm20.launcher2.ui.theme.transparency.transparency
 import de.mm20.launcher2.widgets.AppWidget
@@ -44,6 +45,7 @@ import de.mm20.launcher2.widgets.CalendarWidget
 import de.mm20.launcher2.widgets.AppsWidget
 import de.mm20.launcher2.widgets.MusicWidget
 import de.mm20.launcher2.widgets.NotesWidget
+import de.mm20.launcher2.widgets.SnapPointWidget
 import de.mm20.launcher2.widgets.WeatherWidget
 import de.mm20.launcher2.widgets.Widget
 
@@ -70,7 +72,13 @@ fun WidgetItem(
     } else null
 
     val backgroundOpacity by animateFloatAsState(
-        if (widget is AppWidget && !widget.config.background && !editMode) 0f else MaterialTheme.transparency.surface,
+        when {
+            // SnapPointWidget is invisible in normal mode
+            widget is SnapPointWidget && !editMode -> 0f
+            // AppWidget without background in normal mode
+            widget is AppWidget && !widget.config.background && !editMode -> 0f
+            else -> MaterialTheme.transparency.surface
+        },
         label = "widgetCardBackgroundOpacity",
     )
 
@@ -108,6 +116,7 @@ fun WidgetItem(
                             is CalendarWidget -> stringResource(R.string.widget_name_calendar)
                             is AppsWidget -> stringResource(R.string.widget_name_apps)
                             is NotesWidget -> stringResource(R.string.widget_name_notes)
+                            is SnapPointWidget -> stringResource(R.string.widget_name_snappoint)
                             is AppWidget -> remember(widget.config.widgetId) {
                                 appWidget?.loadLabel(
                                     context.packageManager
@@ -161,6 +170,10 @@ fun WidgetItem(
                             widget,
                             onWidgetAdd = onWidgetAdd,
                         )
+                    }
+
+                    is SnapPointWidget -> {
+                        SnapPointWidgetUI(widget)
                     }
 
                     is AppWidget -> {

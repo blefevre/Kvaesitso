@@ -117,6 +117,7 @@ import de.mm20.launcher2.widgets.AppsWidget
 import de.mm20.launcher2.widgets.CalendarWidget
 import de.mm20.launcher2.widgets.MusicWidget
 import de.mm20.launcher2.widgets.NotesWidget
+import de.mm20.launcher2.widgets.SnapPointWidget
 import de.mm20.launcher2.widgets.WeatherWidget
 import de.mm20.launcher2.widgets.Widget
 import kotlinx.collections.immutable.toImmutableList
@@ -152,6 +153,7 @@ fun ConfigureWidgetSheet(
                 is AppsWidget -> ConfigureFavoritesWidget(widget, onWidgetUpdated)
                 is MusicWidget -> ConfigureMusicWidget(widget, onWidgetUpdated)
                 is NotesWidget -> ConfigureNotesWidget(widget, onWidgetUpdated)
+                is SnapPointWidget -> ConfigureSnapPointWidget(widget, onWidgetUpdated)
             }
         }
 
@@ -664,6 +666,7 @@ fun ColumnScope.ConfigureAppWidget(
                     is CalendarWidget -> it.copy(id = widget.id)
                     is AppsWidget -> it.copy(id = widget.id)
                     is NotesWidget -> it.copy(id = widget.id)
+                    is SnapPointWidget -> it.copy(id = widget.id)
                 }
                 onWidgetUpdated(updatedWidget)
                 replaceWidget = false
@@ -1080,4 +1083,26 @@ fun formatLinkedFileUri(uri: Uri?): String {
         return uri.lastPathSegment ?: ""
     }
     return uri.toString()
+}
+
+@Composable
+fun ColumnScope.ConfigureSnapPointWidget(
+    widget: SnapPointWidget,
+    onWidgetUpdated: (SnapPointWidget) -> Unit
+) {
+    OutlinedCard {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            SwitchPreference(
+                title = stringResource(R.string.widget_config_snappoint_force_snapping),
+                summary = stringResource(R.string.widget_config_snappoint_force_snapping_summary),
+                iconPadding = false,
+                value = widget.config.forceSnapping,
+                onValueChanged = {
+                    onWidgetUpdated(widget.copy(config = widget.config.copy(forceSnapping = it)))
+                }
+            )
+        }
+    }
 }

@@ -13,19 +13,23 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import android.util.Log
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import java.util.UUID
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -40,13 +44,21 @@ import de.mm20.launcher2.ui.ktx.animateTo
 import de.mm20.launcher2.ui.launcher.sheets.WidgetPickerSheet
 import de.mm20.launcher2.ui.locals.LocalSnackbarHostState
 import de.mm20.launcher2.widgets.AppWidget
+import de.mm20.launcher2.widgets.SnapPointWidget
 import kotlinx.coroutines.launch
+
+data class SnapPointInfo(
+    val id: java.util.UUID,
+    val screenY: Float,
+    val forceSnapping: Boolean,
+)
 
 @Composable
 fun WidgetColumn(
     modifier: Modifier = Modifier,
     editMode: Boolean = false,
     onEditModeChange: (Boolean) -> Unit,
+    onSnapPointsChanged: (snapPoints: List<SnapPointInfo>) -> Unit = {},
 ) {
 
     val context = LocalContext.current
@@ -56,16 +68,25 @@ fun WidgetColumn(
 
     var addNewWidget by rememberSaveable { mutableStateOf(false) }
 
-
     Column(
         modifier = modifier.fillMaxWidth()
     ) {
         val scope = rememberCoroutineScope()
+        // Track snap point info by widget ID
+        val snapPointInfoMap = remember { mutableStateMapOf<UUID, SnapPointInfo>() }
+
         Column {
             val widgets by viewModel.widgets.collectAsState()
             val swapThresholds = remember(widgets) {
                 Array(widgets.size) { floatArrayOf(0f, 0f) }
             }
+
+            // Clean up removed snap points
+            LaunchedEffect(widgets) {
+                val currentSnapPointIds = widgets.filterIsInstance<SnapPointWidget>().map { it.id }.toSet()
+                snapPointInfoMap.keys.retainAll(currentSnapPointIds)
+            }
+
             val widgetsWithIndex = remember(widgets) { widgets.withIndex() }
             for ((i, widget) in widgetsWithIndex) {
                 key(widget.id) {
@@ -109,6 +130,16 @@ fun WidgetColumn(
                             .onPlaced {
                                 swapThresholds[i][0] = it.positionInParent().y
                                 swapThresholds[i][1] = it.positionInParent().y + it.size.height
+                                // Track snap point screen positions (windowY)
+                                // Pass the raw screen position - parent will handle snapping logic
+                                if (widget is SnapPointWidget) {
+                                    val screenY = it.positionInWindow().y
+                                    val newInfo = SnapPointInfo(widget.id, screenY, widget.config.forceSnapping)
+                                    snapPointInfoMap[widget.id] = newInfo
+                                    val snapPointsList = snapPointInfoMap.values.toList()
+                                    Log.d("WidgetColumn", "SnapPoint screenY: $screenY, forceSnapping: ${widget.config.forceSnapping}")
+                                    onSnapPointsChanged(snapPointsList)
+                                }
                             }
                             .padding(top = if (i > 0) 8.dp else 0.dp)
                             .offset {
